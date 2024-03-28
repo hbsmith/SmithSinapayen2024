@@ -1,0 +1,166 @@
+---
+title: "Figure1"
+author: "Lana"
+date: '2023-06-22'
+output: html_document
+---
+
+This file plots the mantel heatmaps.
+
+Libraries
+
+```{r}
+library("ggplot2")     
+source("Utilities.R")
+library("beepr")
+library("patchwork")
+```
+
+
+Read compressed files (.gz data) for radius selection function
+
+```{r}
+setwd("../analysis")
+base_path = "../scripts/example_data/"
+sub_folder = "2024-03-12-175828/"
+figure_folder = paste0(base_path, sub_folder, "figures/")
+dir.create(figure_folder, showWarnings = FALSE)
+
+
+data = read_sim_data(base_path, sub_folder)
+df_model_sweep = data[[4]]
+df_parameters = data[[1]]
+
+
+# Other parameters
+space_dim = 3
+comp_dim = df_parameters$compsize
+# number of permutations for mantel calculation
+n_perm = 100
+comp_names = paste("comp_",c(1:comp_dim), sep="")
+selection_func = "r"
+```
+
+
+Remove some of the redundant r values
+```{r}
+# 12, 11 and 10 have ~ the same values as 20; remove all and keep 20
+df_parameters$r = c(9, 20, 50, 174)
+df_model_sweep = subset(df_model_sweep, r %in% df_parameters$r)
+```
+
+
+## Parameter selection for heatmaps
+
+Choose a parameter subdivision to create heatmaps
+Plot different subdivisions of the model for visual examination
+
+```{r}
+divisions = c("nool", "n_idxs_to_keep_from_destination","r", "mutation_rate")
+plot_divisions(df_model_sweep, df_parameters, divisions)
+```
+
+
+Choose a division, eg ool, and plot the other parameters by color again
+If it looks good, this is how we will divide the data for the heatmaps.
+
+```{r}
+# The data is subset according to the ool values, then color-coded by the other parameters.
+plot_subdivision("nool", df_model_sweep, df_parameters, divisions)
+```
+
+
+## Curve selection: Plot all curves to pick representative ones
+
+(Skip to next cell if the focus scenarii have already been chosen)
+
+```{r}
+plot_runs_individually(df_parameters, df_model_sweep, selection_func)
+```
+
+
+Those are our chosen curves.
+These curves will be highlighted on the heatmaps
+
+```{r}
+
+# diff and id must not be the same for 2 choices
+# curvetype: 0 is flat, 1 is growth, 2 is inverted U
+cols = c( "ool", "select_value", "mutation", "id", "curve_type")
+chosen_dfs = data.frame(matrix(0, nrow = 0, ncol = length(cols)-1))
+selection = c()
+
+# ool r mut id
+# ool 10
+# growth
+selection = c(selection, "r")
+chosen = c(10, 20, 0, 0, 1)
+chosen_dfs = rbind(chosen_dfs, chosen)
+# no u
+# flat
+selection = c(selection, "r")
+chosen = c(10, 9, 0, 5, 0)
+chosen_dfs = rbind(chosen_dfs, chosen)
+
+# ool 1
+# growth
+selection = c(selection, "r")
+chosen = c(1, 20, 0, 2, 1)
+chosen_dfs = rbind(chosen_dfs, chosen)
+# inverted U
+selection = c(selection, "r")
+chosen = c(1, 174, 0, 0, 2)
+chosen_dfs = rbind(chosen_dfs, chosen)
+# flat
+selection = c(selection, "r")
+chosen = c(1, 174, 0, 5, 0)
+chosen_dfs = rbind(chosen_dfs, chosen)
+
+names(chosen_dfs) = cols
+chosen_dfs$selection = selection
+```
+
+
+Those are our chosen curves for startingmantel=high
+10 0.8 0 5 (flat)
+10, 0.8, 0, 0, 0 (curved)
+1 0.8 0 0 (short), 
+1 3.2 0.1 0 (down)
+
+
+# Now make the actual figures
+
+Heatmaps with highlights and labels, for starting with low mantel
+
+```{r}
+# overlay on heatmap
+# https://stackoverflow.com/questions/64309620/strikethrough-overlay-on-specific-cells-of-a-heatmap-in-ggplot2
+
+# colorblind friendly colors
+# http://www.cookbook-r.com/Graphs/Colors_(ggplot2)/
+# flat, growth, inverted u
+colors = c("#D55E00","#F0E442", "#009E73")
+
+ggp_heat_r_1 = heatmap_with_highlight(df_model_sweep, selection_func, chosen_dfs, df_parameters, my_n_ool=1, my_colors=colors, legend = FALSE)
+ggp_heat_r_1
+ggp_heat_r_10 = heatmap_with_highlight(df_model_sweep, selection_func, chosen_dfs, df_parameters, my_n_ool=10, my_colors=colors, legend = FALSE)
+ggp_heat_r_10
+```
+
+Draw all curves from selected cells in same graph
+
+```{r}
+plot_selected_r = plot_selected_mantels(df_model_sweep, chosen_dfs, "r")
+plot_selected_r
+```
+
+
+
+Finally, put all figures in 1 plot
+
+```{r}
+save_pdf = TRUE
+
+file_path = paste0(figure_folder, "/202403-heatmap.pdf")
+make_heatmap_figure("r", ggp_heat_r_1, ggp_heat_r_10, plot_selected_r, my_save = save_pdf, my_filename = file_path)
+```

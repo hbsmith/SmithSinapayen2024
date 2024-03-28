@@ -1,0 +1,924 @@
+
+
+
+Load libraries
+
+```{r}
+# https://github.com/etam4260/kneedle
+source("Utilities.R")
+library(RColorBrewer)
+library(ggplot2)
+library(grid)
+library(data.table)
+```
+
+
+
+Set folder and type of selection function here
+
+```{r}
+base_path = "../scripts/example_data/"
+sub_folder = "2024-03-12-175828/"
+selection_func = "r"
+
+figure_folder = paste0(base_path, sub_folder, "figures/")
+dir.create(figure_folder, showWarnings = FALSE)
+```
+
+
+Read data
+
+```{r}
+data = read_sim_data(base_path, sub_folder)
+
+df_model_sweep = data[[4]]
+df_parameters = data[[1]]
+df_planets_sweep = data[[2]]
+df_life_sweep = data[[3]]
+diffs = df_parameters$r
+param_order = "ool r mut id"
+selection_func = "r"
+
+# Remove some of the redundant r values
+# 12, 11 and 10 have ~ the same values as 20; remove all and keep 20
+df_parameters$r = c(9, 20, 50, 174)
+df_model_sweep = subset(df_model_sweep, r %in% df_parameters$r)
+```
+
+
+Subset 1 time step of 1 run.
+
+```{r}
+n_ool = 1
+p_r = 20
+p_mutation = 0
+p_id = 1
+
+result = select_parameter_set(df_planets_sweep, df_life_sweep, p_id, p_r, p_mutation, selection_func)
+
+df_planets = result[[1]]
+df_lifes = result[[2]]
+df_model = result[[3]]
+```
+
+
+
+Time-independent parameters
+```{r}
+total_n_planets = 1000
+select_cols = c(12:21) 
+db_minPts = 11
+elbow_sens = 1 # empirically determined to correspond to elbow visually
+time_steps = unique(df_planets$step)
+n_time_steps = length(time_steps)
+df_planets_t0 = subset(df_planets, step==0)
+
+# when saving figure
+param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+
+```
+
+
+
+Plot terraformed ratio = f(timestep) for reference
+
+```{r}
+t_ratio = data.frame(unique(df_model$step), unique(df_model$n_living_planets)/total_n_planets) 
+colnames(t_ratio) = c("step", "alive_ratio")
+plot(t_ratio$step, t_ratio$alive_ratio)
+```
+
+
+Cluster compositions through time, or read file if it already exists.
+Calculate IQR, mantel, and p-value for each cluster as well.
+Time consuming function.
+
+```{r}
+run_name = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation, "-elbowsens_", elbow_sens)
+clusters_path = paste0(base_path, sub_folder, run_name, "-clusters.csv")
+spread_path = paste0(base_path, sub_folder, run_name,"-spread.csv")
+
+max_timestep = max(time_steps)
+
+if(file.exists(clusters_path)){
+  print("Clusters file already exist")
+  print(clusters_path)
+  dbscan_sweep = read.csv(clusters_path)
+  print("coefficients read.")
+} else{
+  sp_spread_columns = c("step", "cluster_id", "cluster_size", "iqr", "mantel", "pval")
+  sp_spread_sweep = data.frame(matrix(0, nrow = 0, ncol = length(sp_spread_columns)))
+  colnames(sp_spread_sweep) = sp_spread_columns
+  
+  columns = c("step","planet_id","cluster_id")
+  dbscan_sweep = data.frame(matrix(0, nrow = total_n_planets*n_time_steps, ncol = length(columns)))
+  colnames(dbscan_sweep) = columns
+  
+  dbscan_sweep = data.frame(matrix(0, nrow = total_n_planets*n_time_steps, ncol = length(columns)))
+  colnames(dbscan_sweep) = columns
+  
+  for(i in c(1:n_time_steps)){ 
+  
+    t = time_steps[i]
+    print(paste(t, "/", max_timestep, "steps"))
+    df_planets_t = subset(df_planets, step == t)
+    compositions = df_planets_t[,select_cols]
+    comp_distances = full(distance(compositions))
+    
+    dbscan_cl = dbscan_clusters(db_minPts, comp_distances, total_n_planets, sensitivity = elbow_sens)
+    start = (i-1)*total_n_planets+1 # start at 1
+    dbscan_sweep$step[start:(start+total_n_planets-1)] = t
+    # ids start at 1
+    dbscan_sweep$planet_id[start:(start+total_n_planets-1)] = c(1:total_n_planets)
+    dbscan_sweep$cluster_id[start:(start+total_n_planets-1)] = dbscan_cl$cluster
+    
+   
+    cids = unique(dbscan_cl$cluster)
+    for (cid in cids){
+      detected = df_planets_t[dbscan_cl$cluster==cid,]
+      # Calculate the interquartile range
+      iqr = (IQR(detected$x) + IQR(detected$y) + IQR(detected$z))/3
+      
+      # Calculate the mantel
+      dist_ph_sc = distance(detected[,c("x", "y", "z")])
+      dist_comp_sc= distance(detected[select_cols])
+      # we should not calculate this here, but instead subset the distance from a global distance matrix
+      a = lower(dist_ph_sc)
+      b = lower(dist_comp_sc)
+      m = mantel(a ~ b, nperm=100)
+      row = c(t, cid, length(detected$id), iqr, m["mantelr"], m["pval3"])
+      sp_spread_sweep = rbind(sp_spread_sweep, row)
+      colnames(sp_spread_sweep) = sp_spread_columns
+    }
+  }
+  
+  sp_spread_sweep$alive_ratio = 0
+  for(t in sp_spread_sweep$step){
+    a = subset(t_ratio, step==t)
+    sp_spread_sweep[sp_spread_sweep$step==t, ]$alive_ratio = a$alive_ratio
+  }
+  
+  print(paste0("saving at: ", clusters_path))
+  write.csv(dbscan_sweep, clusters_path)
+  print(paste0("saving at: ", spread_path))
+  write.csv(sp_spread_sweep, spread_path)
+}
+
+```
+
+
+Interquartile ratio threshold
+
+```{r}
+# 1/8 of the space in 3D
+half_space = subset(df_planets_t0, (x<max(x/2)) & (y<max(y/2)) & (z<max(z/2)))
+iqr_threshold = (IQR(half_space$x) + IQR(half_space$y) + IQR(half_space$z))/3
+```
+
+
+Plot the mantel and p-value for each cluster
+
+```{r}
+save_pdf = FALSE
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-clusters_mantel_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+not_noise = subset(sp_spread_sweep, cluster_id != 0)
+
+plot(sp_spread_sweep$alive_ratio, sp_spread_sweep$mantel,
+     xlab = "Ratio of terraformed planets",
+     ylab = "Mantel coefficient",
+     pch=20, col="darkgray")
+points(not_noise$alive_ratio, not_noise$mantel, pch=20)
+points(df_model$n_living_planets/1000, df_model$mantel_corr_coeff, type="l")
+abline(v=0.04, lty=2)
+
+if(save_pdf){
+  dev.off()
+}
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-clusters_pvalue_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+plot(sp_spread_sweep$alive_ratio, sp_spread_sweep$pval,
+     xlab = "Ratio of terraformed planets",
+     ylab = "Mantel p-value",
+     pch=20, col="darkgray")
+points(not_noise$alive_ratio, not_noise$pval, pch=20)
+points(df_model$n_living_planets/1000, df_model$mantel_p_value, type="l")
+abline(v=0.04, lty=2)
+
+if(save_pdf){
+  dev.off()
+}
+
+
+```
+
+Remove each cluster from the dataset, and calculate the mantel of the remaining space.
+Then calculate the mantel contribution of each cluster.
+
+```{r}
+
+if (!"cropped_mantel" %in% colnames(sp_spread_sweep)){
+  
+  sp_spread_sweep$cropped_mantel = -1
+  sp_spread_sweep$cropped_pvalue = -1
+
+  select_cols = c(12:21) 
+  print(colnames(df_planets_t)[select_cols])
+
+  for (t in unique(sp_spread_sweep$step)){
+    print(paste(t, "/", max_timestep, "steps"))
+    
+    df_planets_t = subset(df_planets, step == t)
+    dbscan_cl = subset(dbscan_sweep, step == t)
+    alive_ratio = subset(t_ratio, step == t)$alive_ratio[1]
+  
+    compositions = df_planets_t[,select_cols]
+    comp_distances = full(distance(compositions))
+
+    cids = unique(dbscan_cl$cluster_id)
+    for (cid in cids){
+      cropped_planets = df_planets_t[!dbscan_cl$cluster_id==cid,]
+      dist_ph = distance(cropped_planets[,c("x", "y", "z")])
+      dist_comp = distance(cropped_planets[select_cols])
+      # we should not calculate this here
+      a = lower(dist_ph)
+      b = lower(dist_comp)
+      m = mantel(a ~ b, nperm=100)
+      
+      
+      sp_spread_sweep[sp_spread_sweep$step==t & sp_spread_sweep$cluster_id==cid,]$cropped_mantel = m["mantelr"]
+      sp_spread_sweep[sp_spread_sweep$step==t & sp_spread_sweep$cluster_id==cid,]$cropped_pvalue = m["pval3"]
+    }
+  }
+  
+  print(paste0("saving at: ", spread_path))
+  write.csv(sp_spread_sweep, spread_path)
+}
+```
+
+
+Plot results
+
+```{r}
+plot(sp_spread_sweep$alive_ratio, sp_spread_sweep$cropped_mantel,
+     ylab = "Cropped space mantel", xlab = "Terraformed ratio"
+     )
+abline(v=0.04)
+plot(sp_spread_sweep$alive_ratio, sp_spread_sweep$cropped_pvalue,
+     ylab = "Cropped space p-value", xlab = "Terraformed ratio"
+     )
+abline(v=0.04)
+```
+
+
+Calculate the contribution of each cluster to the overall mantel
+
+```{r}
+
+# sp_spread_sweep$cropped_mantel = cropped_space_mantels$mantel
+sp_spread_sweep$mantel_contribution = -1
+
+for (t in unique(sp_spread_sweep$step)){
+  df_model_t = subset(df_model, step == t)
+  global_mantel = df_model_t$mantel_corr_coeff
+  # difference / global
+  # eg: m was 1, now is 0.8; contribution is 1-0.8, normalized
+  contribution = (global_mantel - sp_spread_sweep[sp_spread_sweep$step==t,]$cropped_mantel)/global_mantel
+  sp_spread_sweep[sp_spread_sweep$step==t,]$mantel_contribution = contribution
+}
+
+```
+
+```{r}
+# Negative contribution means removing the cluster increased the mantel
+# Towards the end, every part of the space is equivalent, no contribution is high
+plot(sp_spread_sweep$alive_ratio, sp_spread_sweep$mantel_contribution)
+plot(sp_spread_sweep$alive_ratio, sp_spread_sweep$mantel_contribution, ylim = c(0,1))
+```
+
+
+
+Plot iqr and some possible correlation plots
+
+```{r}
+save_pdf = FALSE
+shape = "1col"
+
+if (save_pdf){
+  file_name = "202403-corr_iqr"
+  prepare_figure_pdf(figure_folder, file_name, param_names, shape)
+}
+
+plot(sp_spread_sweep$iqr, sp_spread_sweep$false_positives, 
+     pch=20, xlab = "Interquartile range", ylab = "False positives"
+     )
+
+if(save_pdf){
+  dev.off()
+}
+
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-corr_mc_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+plot(sp_spread_sweep$mantel_contribution, sp_spread_sweep$false_positives,
+     pch=20, xlab = "Mantel Contribution", ylab = "False positives"
+     )
+
+if(save_pdf){
+  dev.off()
+}
+
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-corr_pvalue_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+plot(sp_spread_sweep$pval, sp_spread_sweep$false_positives,
+     pch=20, xlab = "Cluster p-value", ylab = "False positives"
+     )
+
+if(save_pdf){
+  dev.off()
+}
+
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-corr_mantel_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+plot(sp_spread_sweep$mantel, sp_spread_sweep$false_positives,
+     pch=20, xlab = "Cluster Mantel coefficient", ylab = "False positives"
+     )
+
+if(save_pdf){
+  dev.off()
+}
+
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-corr_res-m_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+plot(sp_spread_sweep$cropped_mantel, sp_spread_sweep$false_positives,
+     pch=20, xlab = "Residual Mantel coefficient", ylab = "False positives"
+     )
+
+if(save_pdf){
+  dev.off()
+}
+
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-corr_res-p_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+plot(sp_spread_sweep$cropped_pvalue, sp_spread_sweep$false_positives,
+     pch=20, xlab = "Residual p-value", ylab = "False positives"
+     )
+
+if(save_pdf){
+  dev.off()
+}
+```
+
+Plot MC with inset
+
+```{r}
+save_pdf = FALSE
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-mc_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+positives = subset(sp_spread_sweep, mantel_contribution>0)
+inset = ggplot(sp_spread_sweep, aes(alive_ratio, mantel_contribution)) + geom_point(color="darkgray") +
+  geom_point(data=positives, color="black") +
+  # theme(axis.text.x = element_blank(), axis.ticks.x =element_blank() )+
+  xlab("") +
+  ylab("")
+
+main_plot = ggplot(sp_spread_sweep, aes(alive_ratio, mantel_contribution)) + geom_point(color="darkgray") +
+  geom_point(data = positives, color="black") +
+  ylim(-0.2,1) + 
+  xlab("Ratio of terraformed planets") +
+  ylab("Mantel contribution")
+
+#A viewport taking up a fraction of the plot area
+vp <- viewport(width = 0.4, height = 0.4, x = 0.75, y = 0.7)
+
+print(main_plot)
+print(inset, vp = vp)
+
+if(save_pdf){
+  dev.off()
+}
+
+```
+
+
+
+Plot selection space with MC threshold at 50%
+
+```{r}
+
+mantel_contribution_threshold = 0.5 # 0.1
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-fig3_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 4,
+    height = 4)
+}
+
+# make this a function
+
+candidates_clusters = subset(sp_spread_sweep, iqr<iqr_threshold)
+candidates_clusters = subset(candidates_clusters, mantel_contribution>mantel_contribution_threshold)
+
+plot(sp_spread_sweep$iqr, sp_spread_sweep$mantel_contribution,
+     xlab = "Interquartile range", ylab = "Mantel Contribution", pch=20, axes = FALSE,
+     xlim = c(0,60), # ylim = c(5,35), 
+     )
+points(candidates_clusters$iqr, candidates_clusters$mantel_contribution,
+       pch=20, col="red"
+       )
+axis(1)
+axis(2)
+abline(h=mantel_contribution_threshold)
+abline(v=iqr_threshold)
+
+if(save_pdf){
+  dev.off()
+}
+
+
+```
+
+
+Calculate detection performance metrics for individual clusters
+
+```{r}
+
+columns = c("true_positives", "false_positives", "true_negatives", "false_negatives",
+            "accuracy", "sensitivity", "specificity")
+sp_spread_sweep[columns] = 0
+
+for (t in unique(sp_spread_sweep$step)){
+  df_planets_t = subset(df_planets, step == t)
+  sp_spread = subset(sp_spread_sweep, step == t)
+  dbscan_cl = subset(dbscan_sweep, step == t)
+  
+  for (cid in unique(dbscan_cl$cluster_id)){
+    detected = df_planets_t[dbscan_cl$cluster_id==cid,]
+    perf = evaluate_detection(detected, df_planets_t)
+    sp_spread_sweep[(sp_spread_sweep$step == t) & (sp_spread_sweep$cluster_id==cid), columns] = perf
+  }
+}
+
+columns = c("true_positives", "false_positives", "true_negatives", "false_negatives",
+            "accuracy", "sensitivity", "specificity")
+```
+
+
+Plot performance
+
+```{r}
+candidates_clusters = subset(sp_spread_sweep, iqr<iqr_threshold)
+# candidates_clusters = subset(sp_spread_sweep, mantel_contribution>mantel_contribution_threshold)
+candidates_clusters = subset(candidates_clusters, mantel_contribution>0)
+
+plot(df_model$n_living_planets/1000, df_model$n_living_planets, type="l",
+     main = "True positives", xlab = "Terraformed ratio"
+     )
+points(sp_spread_sweep$alive_ratio, sp_spread_sweep$true_positives)
+points(candidates_clusters$alive_ratio, candidates_clusters$true_positives, col="red")
+```
+
+
+```{r}
+
+candidates_clusters = subset(sp_spread_sweep, iqr<iqr_threshold)
+plot(df_model$n_living_planets/1000, df_model$n_living_planets, type="l",
+     main = "True positives (iqr selection)", xlab = "Terraformed ratio"
+     )
+points(sp_spread_sweep$alive_ratio, sp_spread_sweep$true_positives)
+points(candidates_clusters$alive_ratio, candidates_clusters$true_positives, col="blue")
+
+candidates_clusters = subset(sp_spread_sweep, mantel_contribution>=mantel_contribution_threshold)
+plot(df_model$n_living_planets/1000, df_model$n_living_planets, type="l",
+     main = "True positives (MC selection)", xlab = "Terraformed ratio"
+     )
+points(sp_spread_sweep$alive_ratio, sp_spread_sweep$true_positives)
+points(candidates_clusters$alive_ratio, candidates_clusters$true_positives, col="blue")
+
+
+candidates_clusters = subset(sp_spread_sweep, iqr<iqr_threshold)
+plot(df_model$n_living_planets/1000, df_model$n_living_planets, type="l",
+     main = "False positives (iqr selection)", xlab = "Terraformed ratio"
+     )
+points(sp_spread_sweep$alive_ratio, sp_spread_sweep$false_positives)
+points(candidates_clusters$alive_ratio, candidates_clusters$false_positives, col="red")
+
+candidates_clusters = subset(sp_spread_sweep, mantel_contribution>=mantel_contribution_threshold)
+plot(df_model$n_living_planets/1000, df_model$n_living_planets, type="l",
+     main = "False positives (MC selection)", xlab = "Terraformed ratio"
+     )
+points(sp_spread_sweep$alive_ratio, sp_spread_sweep$false_positives)
+points(candidates_clusters$alive_ratio, candidates_clusters$false_positives, col="red")
+
+
+# Both
+candidates_clusters = subset(sp_spread_sweep, iqr<iqr_threshold)
+candidates_clusters = subset(candidates_clusters, mantel_contribution>=mantel_contribution_threshold)
+
+plot(df_model$n_living_planets/1000, df_model$n_living_planets, type="l",
+     main = "True positives (iqr & MC selection)", xlab = "Terraformed ratio"
+     )
+points(sp_spread_sweep$alive_ratio, sp_spread_sweep$true_positives)
+points(candidates_clusters$alive_ratio, candidates_clusters$true_positives, col="blue")
+
+plot(df_model$n_living_planets/1000, df_model$n_living_planets, type="l",
+     main = "False positives (iqr & MC selection)", xlab = "Terraformed ratio"
+     )
+points(sp_spread_sweep$alive_ratio, sp_spread_sweep$false_positives)
+points(candidates_clusters$alive_ratio, candidates_clusters$false_positives, col="red")
+```
+
+
+Plot all performance measures for selected clusters for combined selection methods
+
+```{r}
+save_pdf = FALSE
+
+mc_values = c(0,0.25,0.5)
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  # figure_path = paste0(figure_folder, "/202403-performance_ratios_", param_names, ".pdf")
+  figure_path = paste0(figure_folder, "/performance_ratios", ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 8,
+    height = 3)
+}
+
+par(mfcol = c(1,3)) 
+
+for (mantel_contribution_threshold in mc_values){
+
+  candidates_clusters = subset(sp_spread_sweep, iqr<iqr_threshold)
+  candidates_clusters = subset(candidates_clusters, mantel_contribution>mantel_contribution_threshold)
+
+  ylabel = ""
+  xlabel = ""
+  if(mantel_contribution_threshold == 0){
+    ylabel = "Ratio of planets"
+    xlabel = "Ratio of terraformed planets"
+  }
+  
+  plot(candidates_clusters$alive_ratio, candidates_clusters$true_positives/candidates_clusters$cluster_size, col="#117733", 
+       ylim = c(0,1), xlim = c(0,1), lwd = 3, axes = FALSE, pch=20,
+       xlab = xlabel, ylab = ylabel, 
+       )
+  axis(1)
+  axis(2, pos=0)
+  points(candidates_clusters$alive_ratio, candidates_clusters$false_positives/candidates_clusters$cluster_size, 
+         col="#999933", lwd = 3, pch=20
+         )
+  points(candidates_clusters$alive_ratio, candidates_clusters$true_negatives/(1000-candidates_clusters$cluster_size), 
+         col="#882255", lwd = 3, pch=20
+         )
+  points(candidates_clusters$alive_ratio, candidates_clusters$false_negatives/(1000-candidates_clusters$cluster_size), 
+         col="#CC6677", lwd = 3, pch=20
+         )
+  if(mantel_contribution_threshold==0.5){
+    legend(0.4, 0.7, legend=c("True positives", "False positives", "True negatives", "False negatives"),  
+           fill = c("#117733","#999933", "#882255", "#CC6677")
+    )
+  }
+  
+}
+  
+  
+if(save_pdf){
+  dev.off()
+}
+
+```
+
+
+
+Collate the data by MC threshold
+
+```{r}
+m = matrix(0, nrow = 0, ncol = 4)
+for (mantel_contribution_threshold in mc_values){
+  candidates_clusters = subset(sp_spread_sweep, iqr<iqr_threshold)
+  candidates_clusters = subset(candidates_clusters, mantel_contribution>mantel_contribution_threshold)
+  m = rbind(m, cbind(rep(mantel_contribution_threshold, length(candidates_clusters$cluster_id)), 
+                     candidates_clusters[,c("alive_ratio", "sensitivity","specificity","accuracy")]))
+}
+perf_by_mc = data.frame(m)
+colnames(perf_by_mc) = c("mc_threshold","alive_ratio", "sensitivity","specificity","accuracy")
+
+perf_by_mc$mc_threshold = as.character(perf_by_mc$mc_threshold)
+```
+
+
+Performance scatterplots
+
+```{r}
+save_pdf = FALSE
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-performance_metrics_",
+                       mantel_contribution_threshold, "_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 8,
+    height = 3)
+}
+
+par(mfcol = c(1,3)) 
+
+sp <- ggplot(perf_by_mc, aes(alive_ratio, sensitivity)) + 
+  geom_point(aes(color = mc_threshold)) +
+  xlab("Ratio of terraformed planets") +
+  ylim(0,1)+
+  theme_minimal() +
+  theme(legend.position = "top") +
+  scale_color_brewer("Blues")
+sp
+
+sp <- ggplot(perf_by_mc, aes(alive_ratio, specificity)) + 
+  geom_point(aes(color = mc_threshold)) +
+  xlab("") +
+  ylim(0,1)+
+  theme_minimal()+
+  theme(legend.position = "top") +
+  scale_color_brewer("Blues")
+sp
+
+sp <- ggplot(perf_by_mc, aes(alive_ratio, accuracy)) + 
+  geom_point(aes(color = mc_threshold)) +
+  xlab("") +
+  ylim(0,1)+
+  theme_minimal()+
+  theme(legend.position = "top") +
+  scale_color_brewer("Blues")
+sp
+
+if(save_pdf){
+  dev.off()
+}
+```
+
+
+Performance boxplots
+
+```{r}
+short = as.data.table(perf_by_mc[, c( "mc_threshold", "sensitivity", "specificity", "accuracy")])
+long = melt(short, id = c("mc_threshold"), value.name = "performance") 
+long$mc_threshold <- as.factor(long$mc_threshold)
+```
+
+
+```{r}
+# from https://www.datanovia.com/en/lessons/combine-multiple-ggplots-into-a-figure/
+save_pdf = FALSE
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  # figure_path = paste0(figure_folder, "/202403-boxplots_", param_names, ".pdf")
+  figure_path = paste0(figure_folder, "boxplots", ".pdf")
+  
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 8,
+    height = 3)
+}
+
+bp <- ggplot(long, aes(mc_threshold, performance)) + 
+  geom_boxplot(aes(fill = mc_threshold), position = position_dodge(0.9)) +
+  scale_fill_brewer(palette = "Blues", name = "MC threshold") +
+  theme_minimal()+
+  theme(legend.position = "top") +
+  xlab("Mantel Contribution Threshold") +
+  ylab("")
+bp + facet_grid(cols = vars(variable))
+
+if(save_pdf){
+  dev.off()
+}
+```
+
+
+
+Finally, plot an example for 1 time step
+
+```{r}
+save_pdf = FALSE
+
+
+# first acceptable detection for MC threshold = 0.25
+t = 67
+
+df_planets_t = subset(df_planets, step == t)
+dbscan_cl = subset(dbscan_sweep, step == t)
+terraformed = subset(df_planets_t, alive == alive_value)
+detected = df_planets_t[dbscan_cl$cluster_id==cid,]
+
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  #figure_path = paste0(figure_folder, "/202403-pca_", param_names, ".pdf")
+  figure_path = paste0(figure_folder, "pca", ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+# Plot pca
+compositions = df_planets_t[,select_cols]
+pca_res <- prcomp(compositions, scale. = TRUE)
+autoplot(pca_res, col=dbscan_cl$cluster+1, pch=20)
+
+if(save_pdf){
+  dev.off()
+}
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-detection_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+# plot terraformed planets
+plot(df_planets_t$x, df_planets_t$y,
+     pch=20, col="grey", xlab = "X",  ylab = "Y"
+     )
+points(terraformed$x, terraformed$y, col="blue", pch=20)
+points(detected$x, detected$y, col="red")
+  
+if(save_pdf){
+  dev.off()
+}
+
+
+```
+Plot some elbows
+
+```{r}
+save_pdf = FALSE
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-elbow_detection_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+
+# early elbow low sensitivity
+t = 105
+df_planets_t = subset(df_planets, step == t)
+compositions = df_planets_t[,select_cols]
+comp_distances = full(distance(compositions))
+
+par(mfcol = c(2,2)) 
+epsilon_dbscan(comp_distances, db_minPts, total_n_planets, plot_elbow = TRUE, my_sensitivity = elbow_sens)
+
+# early elbow high sensitivity
+d = epsilon_dbscan(comp_distances, db_minPts, total_n_planets, plot_elbow = TRUE, my_sensitivity = 4)
+
+# late elbow low sensitivity
+t = 205
+df_planets_t = subset(df_planets, step == t)
+compositions = df_planets_t[,select_cols]
+comp_distances = full(distance(compositions))
+epsilon_dbscan(comp_distances, db_minPts, total_n_planets, plot_elbow = TRUE, my_sensitivity = elbow_sens)
+
+# late elbow high sensitivity
+epsilon_dbscan(comp_distances, db_minPts, total_n_planets, plot_elbow = TRUE, my_sensitivity = 10)
+
+if(save_pdf){
+  dev.off()
+}
+
+
+```
+
+
+
+Plot the iqr or number of planets and then use contribution as color
+
+```{r}
+positives = subset(sp_spread_sweep, mantel_contribution>0)
+sc = scale_color_gradient(low = "blue", high = "red", 
+                          limits = c(0,1),
+                          name = "MC")
+
+ggplot(positives, aes(alive_ratio, iqr)) +
+  geom_point(aes(color = mantel_contribution)) + sc +
+  geom_hline(yintercept = iqr_threshold, linetype="dashed") +
+  xlab("Percentage of terraformed planets") +
+  ylab("Spatial IQR")
+
+
+ggplot(positives, aes(alive_ratio, cluster_size)) +
+  geom_point(aes(color = mantel_contribution)) + sc +
+  xlab("Percentage of terraformed planets") +
+  ylab("Number of planets in cluster")
+
+ggplot(positives, aes(alive_ratio, pval)) +
+  geom_point(aes(color = mantel_contribution)) + sc +
+  xlab("Percentage of terraformed planets") +
+  ylab("Cluster p value")
+
+ggplot(positives, aes(alive_ratio, pval)) +
+  geom_point(aes(color = mantel_contribution)) + sc +
+  xlab("Percentage of terraformed planets") +
+  ylab("Cluster p value") +
+  ylim(0,0.05)
+
+```
+
+```{r}
+save_pdf = FALSE
+
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-iqr_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+ggplot(positives, aes(alive_ratio, iqr)) +
+  geom_point(aes(color = mantel_contribution)) + sc +
+  geom_hline(yintercept = iqr_threshold, linetype="dashed") +
+  theme(legend.position = c(0.93, 0.80)) +
+  xlab("Ratio of terraformed planets") +
+  ylab("Spatial IQR")
+
+if(save_pdf){
+  dev.off()
+}
+```

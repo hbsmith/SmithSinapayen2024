@@ -1,0 +1,130 @@
+---
+title: "202403-fig1"
+author: "Lana"
+date: "2024-03-07"
+output: html_document
+---
+
+This file plots one simulation run's mantel and pvalue.
+
+Load libraries
+
+```{r}
+source("Utilities.R")
+```
+
+
+Set folder and type of selection function here
+
+```{r}
+base_path = "../scripts/example_data/"
+sub_folder = "2024-03-12-175828/"
+selection_func = "r"
+
+figure_folder = paste0(base_path, sub_folder, "figures/")
+dir.create(figure_folder, showWarnings = FALSE)
+```
+
+
+Read data
+
+```{r}
+data = read_sim_data(base_path, sub_folder)
+
+df_model_sweep = data[[4]]
+df_parameters = data[[1]]
+df_planets_sweep = data[[2]]
+df_life_sweep = data[[3]]
+diffs = df_parameters$r
+param_order = "ool r mut id"
+selection_func = "r"
+
+# Remove some of the redundant r values
+# 12, 11 and 10 have ~ the same values as 20; remove all and keep 20
+df_parameters$r = c(9, 20, 50, 174)
+df_model_sweep = subset(df_model_sweep, r %in% df_parameters$r)
+```
+
+
+Run this when selecting one run for further analysis. If the run is already selected go to the next cell.
+For plots divided by parameters, see "Figure1.Rmd" file.
+Plot all the mantels together, then one by one in radius selection function.
+
+```{r}
+plot(df_model_sweep$n_living_planets/1000, df_model_sweep$mantel_corr_coeff, main=sub_folder)
+
+ids = df_parameters$n_idxs_to_keep_from_destination
+mutations = df_parameters$mutation_rate
+ools = df_parameters$nool
+
+for (n_ool in ools){
+  df_model_ool = subset(df_model_sweep,  nool==n_ool)
+  for (n_diff in diffs){
+    df_model_diff = subset(df_model_ool,  df_model_ool[,selection_func]==n_diff)
+      for (n_mutation in mutations){
+        df_model_mut = subset(df_model_diff,  mutation_rate==n_mutation)
+        for (n_id in ids){
+          df_model_id = subset(df_model_mut,  n_idxs_to_keep_from_destination==n_id)
+          title = paste(param_order, n_ool, n_diff, n_mutation, n_id)
+          
+          plot(df_model_id$n_living_planets/1000, df_model_id$mantel_corr_coeff,
+               ylim = c(0,0.5), xlim = c(0,1),
+               main = title
+               )
+      }
+    }
+  }
+}
+```
+
+
+Subset 1 time step of 1 run.
+
+```{r}
+n_ool = 1
+p_r = 20
+p_mutation = 0
+p_id = 1
+
+result = select_parameter_set(df_planets_sweep, df_life_sweep, p_id, p_r, p_mutation, selection_func)
+
+df_planets = result[[1]]
+df_lifes = result[[2]]
+df_model = result[[3]]
+```
+
+
+Plot Fig 1 with 2 y axes
+
+```{r}
+save_pdf = TRUE
+if (save_pdf){
+  param_names = paste0("pool_", n_ool, "-pid_", p_id, "-pr_", p_r, "-mutr_", p_mutation)
+  figure_path = paste0(figure_folder, "/202403-one_mantel_", param_names, ".pdf")
+  print(paste("Saving figure at", figure_path))
+  pdf(file = figure_path,   
+    width = 5,
+    height = 4)
+}
+
+par(mar = c(5, 4, 4, 4) + 0.3)              # Additional space for second y-axis
+plot(df_model$n_living_planets/1000, df_model$mantel_corr_coeff,
+     ylim = c(0,0.2), xlim = c(0,1),
+     ylab = "Mantel coefficient", xlab = "Ratio of terraformed planets", axes = FALSE,
+     col = "black", type = "l")
+axis(1, pos = 0)
+axis(2, pos = 0)
+par(new = TRUE)                             # Add new plot
+plot(df_model$n_living_planets/1000, df_model$mantel_p_value,
+     ylim = c(0,0.4), xlim = c(0,1), col = "red",  type = "l",             # Create second plot without axes
+     axes = FALSE, xlab = "", ylab = "")
+axis(side = 4, at = pretty(c(0,0.4)), pos = 1,
+     col="red", col.ticks="red", col.axis="red")      # Add second axis
+mtext("p-value", side = 4, line = 3, col="red")    
+
+if(save_pdf){
+  dev.off()
+}
+
+```
+
