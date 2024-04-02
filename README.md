@@ -56,7 +56,20 @@ julia>
   (scripts) pkg> instantiate
   ```
 
-Now you're ready to run the two scripts:
+### Setup tl;dr
+
+```julia
+# from /scripts
+julia> ]activate .
+
+(scripts) pkg> add https://github.com/hbsmith/TerraformingAgents#0.1.0
+
+(scripts) pkg> instantiate
+```
+
+Now you're ready to run the two scripts...
+
+
 
 ### `run_simulation_parallel.jl`
 
