@@ -78,7 +78,3 @@ This generates the Figure A3 in Smith & Sinapayen, 2024. By default, the plot wi
 julia> include("NplanetsVsMantelAtSTD.jl")
 julia> main()
 ```
-
-## Running R `\analysis`
-
-...
