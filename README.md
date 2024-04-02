@@ -1,4 +1,4 @@
-This repository contains the data, scripts, and notebooks used to generate the results and create the plots found in Smith & Sinapayen, 2024 (https://arxiv.org/abs/2403.14195).
+This repository contains the R and Julia scripts used to generate the results and create the plots found in Smith & Sinapayen, 2024 (https://arxiv.org/abs/2403.14195).
 
 The simulation data is available without rerunning on figshare: https://figshare.com/articles/dataset/2024-03-12-175828_zip/25515067
 
