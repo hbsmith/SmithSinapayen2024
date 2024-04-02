@@ -11,7 +11,6 @@ using Pkg
 println(@__DIR__)
 Pkg.activate(@__DIR__)
 
-using Revise
 using Plots
 using Random
 # Pkg.develop(path=".") #../TerraformingAgents" ## Don't need this if I start the Julia REPL from the package itself

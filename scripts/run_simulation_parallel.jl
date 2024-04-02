@@ -28,7 +28,6 @@ end
     Pkg.activate(@__DIR__)
 end
 @everywhere begin
-    using Revise
     using Agents, Plots, Random
     using TerraformingAgents
     using CSVFiles
