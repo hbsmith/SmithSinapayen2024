@@ -2,6 +2,7 @@
 
 library(rjson)
 library(kneedle)
+library(ecodist)
 
 # general utilities
 alive_value = 1 

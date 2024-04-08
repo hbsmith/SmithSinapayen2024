@@ -7,6 +7,7 @@ Load libraries
 # https://github.com/etam4260/kneedle
 source("Utilities.R")
 library(RColorBrewer)
+library(dbscan)
 library(ggplot2)
 library(grid)
 library(data.table)
