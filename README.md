@@ -91,3 +91,29 @@ This generates the Figure A3 in Smith & Sinapayen, 2024. By default, the plot wi
 julia> include("NplanetsVsMantelAtSTD.jl")
 julia> main()
 ```
+
+
+## Data analysis using R
+
+The `analysis` folder contains the R scripts used to generate figures in the paper.
+We recommend using RStudio for the best experience.
+
+### Install R and RStudio
+
+RStudio is and IDE for R. Both can be installed from these instructions: https://posit.co/download/rstudio-desktop/
+
+### Run the notebooks
+
+Each `.Rmd` notebook has a couple of variables to specify the path to your data folder:
+
+```R
+base_path = "../scripts/example_data/"
+sub_folder = "2024-03-12-175828/"
+```
+
+`base_path` is the path where all data is and where figures will be saved.
+`sub_folder` is the folder whith the one dataset you wish to analyse.
+
+Run the analysis step by step according to your needs.
+
+Some libraries may be required to run some of the scripts. RStudio will prompt you to install them.
