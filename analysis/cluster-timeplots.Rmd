@@ -47,7 +47,7 @@ df_model_sweep = subset(df_model_sweep, r %in% df_parameters$r)
 ```
 
 
-Subset 1 time step of 1 run.
+Subset one run.
 
 ```{r}
 n_ool = 1
