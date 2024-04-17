@@ -7,9 +7,11 @@ Load libraries
 # https://github.com/etam4260/kneedle
 source("Utilities.R")
 library(RColorBrewer)
+library(dbscan)
 library(ggplot2)
 library(grid)
 library(data.table)
+library(ggfortify)
 ```
 
 
@@ -46,7 +48,7 @@ df_model_sweep = subset(df_model_sweep, r %in% df_parameters$r)
 ```
 
 
-Subset 1 time step of 1 run.
+Subset one run.
 
 ```{r}
 n_ool = 1
